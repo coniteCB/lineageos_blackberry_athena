@@ -1,0 +1,26 @@
+diff --git a/android/app/src/com/android/bluetooth/hfp/HeadsetStateMachine.java b/android/app/src/com/android/bluetooth/hfp/HeadsetStateMachine.java
+index fd56faa613..1295993fcf 100644
+--- a/android/app/src/com/android/bluetooth/hfp/HeadsetStateMachine.java
++++ b/android/app/src/com/android/bluetooth/hfp/HeadsetStateMachine.java
+@@ -2200,7 +2200,7 @@ class HeadsetStateMachine extends StateMachine {
+         } else {
+             // In Telecom call, ask Telecom to send send remote phone number
+             if (!mSystemInterface.listCurrentCalls()) {
+-                Log.e(TAG, "processAtClcc: failed to list current calls for " + device);
++                Log.d(TAG, "processAtClcc: no active calls for " + device);
+                 mNativeInterface.clccResponse(device, 0, 0, 0, 0, false, "", 0);
+             } else {
+                 sendMessageDelayed(CLCC_RSP_TIMEOUT, device, CLCC_RSP_TIMEOUT_MS);
+diff --git a/android/app/src/com/android/bluetooth/hfp/HeadsetSystemInterface.java b/android/app/src/com/android/bluetooth/hfp/HeadsetSystemInterface.java
+index 0fea05430e..9c663baab0 100644
+--- a/android/app/src/com/android/bluetooth/hfp/HeadsetSystemInterface.java
++++ b/android/app/src/com/android/bluetooth/hfp/HeadsetSystemInterface.java
+@@ -290,7 +290,7 @@ class HeadsetSystemInterface {
+     public boolean listCurrentCalls() {
+         BluetoothInCallService bluetoothInCallService = getBluetoothInCallServiceInstance();
+         if (bluetoothInCallService == null) {
+-            Log.e(TAG, "listCurrentCalls() failed: mBluetoothInCallService is null");
++            Log.d(TAG, "listCurrentCalls(): mBluetoothInCallService is null (no active call)");
+             return false;
+         }
+         return bluetoothInCallService.listCurrentCalls();

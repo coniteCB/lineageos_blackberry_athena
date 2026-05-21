@@ -1,0 +1,16 @@
+diff --git a/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml b/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml
+index b07defd..122cfb9 100644
+--- a/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml
++++ b/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml
+@@ -5,7 +5,10 @@
+ -->
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     package="com.android.wifi.resources.overlay.sdm660">
++    <application android:hasCode="false" />
+     <overlay
+         android:targetName="WifiCustomization"
+-        android:targetPackage="com.android.wifi.resources" />
++        android:targetPackage="com.android.wifi.resources"
++        android:isStatic="true"
++        android:priority="0" />
+ </manifest>
