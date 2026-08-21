@@ -1,6 +1,6 @@
 From: Johnathan Cintron <squash@shadowfall.me>
 Ported by: krab-ubica
-Subject: [PATCH] msm8998-audio: Fix routing bugs (4.19-kernel HAL port)
+Subject: [PATCH] sdm660-audio: Fix routing bugs (4.19-kernel HAL port)
 
 Original patch:
   https://github.com/...

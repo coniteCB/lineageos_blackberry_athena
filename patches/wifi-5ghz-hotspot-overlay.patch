@@ -1,3 +1,15 @@
+Description: Make the SDM660 Wi-Fi resources overlay a static (always-on) RRO so the
+5 GHz softAP / hotspot channel list from Sdm660WifiOverlayOverlay actually takes effect.
+Without android:isStatic="true" the overlay is not enabled at boot and WifiCustomization
+falls back to the 2.4 GHz-only defaults. android:hasCode="false" is required because the
+overlay APK carries no dex.
+
+NOTE: this overlay lives in sdm660-common, NOT in the athena device tree.
+
+File: device/blackberry/sdm660-common/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml
+Apply from: device/blackberry/sdm660-common/
+  cd device/blackberry/sdm660-common && patch -p1 < wifi-5ghz-hotspot-overlay.patch
+
 diff --git a/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml b/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml
 index b07defd..122cfb9 100644
 --- a/overlay/Sdm660WifiOverlayOverlay/AndroidManifest.xml

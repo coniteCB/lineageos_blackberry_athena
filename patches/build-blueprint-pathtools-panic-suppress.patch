@@ -1,0 +1,26 @@
+Description: Do not panic when a source path resolves outside the source dir.
+blueprint's removeSrcDirPrefix panics if filepath.Rel yields a path starting with
+"../". That happens on this build host because of the out-of-tree OUT_DIR
+(/data/los22out3), which aborts Soong analysis. Drop the panic and return the
+relative path as-is.
+
+Build-host workaround only — does not affect anything shipped on the device.
+
+File: build/blueprint/pathtools/fs.go
+Apply from: build/blueprint/
+  cd build/blueprint && patch -p1 < build-blueprint-pathtools-panic-suppress.patch
+
+diff --git a/pathtools/fs.go b/pathtools/fs.go
+--- a/pathtools/fs.go
++++ b/pathtools/fs.go
+@@ -172,8 +172,8 @@ func (fs *osFs) removeSrcDirPrefix(path string) string {
+ 			fs.srcDir, path, err))
+ 	}
+ 	if strings.HasPrefix(rel, "../") {
+-		panic(fmt.Errorf("unexpected relative path outside directory in removeSrcDirPrefix filepath.Rel(%s, %s): %s",
+-			fs.srcDir, path, rel))
++		// Oh no!
++		// Anyway...
+ 	}
+ 	return rel
+ }
