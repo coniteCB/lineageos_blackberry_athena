@@ -1,0 +1,181 @@
+# Keyboard and nav-button backlight logic, ported from LOS23.
+#
+# Supersedes the earlier kbd-backlight-inverse-lcd.patch, which covered
+# only the brightness curve. Both patches touched the same region of
+# updateDisplayPowerStateLocked, so keeping them separate made the apply
+# order load-bearing for no benefit. This one file now carries the whole
+# feature.
+#
+# Source: tim-ecoder/android_frameworks_base, branch lineage-23.2-athena,
+# commits 8a9d56b294c0, a24fad886c47, 7c9f72746ab3, 6f9153d21778.
+#
+# WHAT IT DOES
+#
+# 1. Inverse-LCD curve for the KEYBOARD backlight only:
+#      screen <= 0     -> kbd off
+#      screen <= 3     -> kbd at 120/255 (darkroom, don't blind the user)
+#      screen <  50    -> kbd full
+#      screen >= 50    -> kbd off (daylight, invisible anyway)
+#    Nav-buttons deliberately keep their unscaled slider value so they stay
+#    visible in daylight.
+#
+# 2. BUTTON_BACKLIGHT_TIMEOUT now also governs the keyboard LED. Previously
+#    the mKeyboardLight branch was a one-shot setBrightness with no timeout,
+#    so the keyboard LED never switched itself off after typing stopped.
+#
+# 3. The keyboard timer is driven by its own timestamp (mLastKbdActivityTime
+#    in PowerGroup), recorded only for EVENT_BUTTON / EVENT_OTHER coming from
+#    SYSTEM_UID. EVENT_OTHER covers the physical QWERTY keys and the keyboard
+#    touchpad, EVENT_BUTTON the capacitive nav-button row. Sharing
+#    mLastButtonActivityTime instead would let any screen tap relight the
+#    keyboard; dropping the uid filter would let app-driven userActivity
+#    (MediaSession, Choreographer) keep it lit forever.
+#
+# 4. mKeyboardVisible no longer gates the keyboard LED. It is driven by the
+#    LID switch, which is meaningless on athena - the keyboard is always
+#    physically present, so the gate only ever turned the light off.
+#
+# mButtonTimeout == 0 means no timeout: the LEDs stay lit while the screen
+# is on. That is what the "Enabled (no timeout)" entry of the BlackBerry
+# keyboard DeviceSettings menu selects, and it is the default there.
+
+diff --git a/services/core/java/com/android/server/power/PowerGroup.java b/services/core/java/com/android/server/power/PowerGroup.java
+index 45c55b8a1f9c..0e5ceeee6309 100644
+--- a/services/core/java/com/android/server/power/PowerGroup.java
++++ b/services/core/java/com/android/server/power/PowerGroup.java
+@@ -86,6 +86,13 @@ public class PowerGroup {
+     private boolean mButtonOn;
+     private boolean mButtonPressed;
+     private long mLastButtonActivityTime;
++    /**
++     * Lineage: tracks the last EVENT_BUTTON or EVENT_OTHER user activity timestamp.
++     * Used to time-out the physical keyboard backlight independently of the
++     * capacitive nav-button row, since EVENT_TOUCH should not keep the kbd
++     * backlight lit.
++     */
++    private long mLastKbdActivityTime;
+     private long mLastPowerOnTime;
+     private long mLastUserActivityTime;
+     private long mLastUserActivityTimeNoChangeLights;
+@@ -386,6 +393,14 @@ public class PowerGroup {
+         mLastButtonActivityTime = lastButtonActivityTime;
+     }
+ 
++    long getLastKbdActivityTimeLocked() {
++        return mLastKbdActivityTime;
++    }
++
++    void setLastKbdActivityTimeLocked(long lastKbdActivityTime) {
++        mLastKbdActivityTime = lastKbdActivityTime;
++    }
++
+     void setLastUserActivityTimeLocked(long lastUserActivityTime,
+             @PowerManager.UserActivityEvent int event) {
+         mLastUserActivityTime = lastUserActivityTime;
+diff --git a/services/core/java/com/android/server/power/PowerManagerService.java b/services/core/java/com/android/server/power/PowerManagerService.java
+index 73ace0cbaf0a..b891f94d81c1 100644
+--- a/services/core/java/com/android/server/power/PowerManagerService.java
++++ b/services/core/java/com/android/server/power/PowerManagerService.java
+@@ -2278,6 +2278,18 @@ public final class PowerManagerService extends SystemService
+                     + ", flags=0x" + Integer.toHexString(flags) + ", uid=" + uid);
+         }
+ 
++        // Lineage: track keyboard-relevant activity (physical keys, keyboard
++        // touchpad, capacitive nav-buttons) separately from screen touches so
++        // the physical-keyboard backlight only lights up for keyboard input.
++        // Only count system-uid events (real hardware input dispatched by
++        // InputDispatcher); app-driven userActivity from MediaSession et al
++        // would otherwise prevent the kbd backlight from ever timing out.
++        if (uid == Process.SYSTEM_UID
++                && (event == PowerManager.USER_ACTIVITY_EVENT_BUTTON
++                || event == PowerManager.USER_ACTIVITY_EVENT_OTHER)) {
++            powerGroup.setLastKbdActivityTimeLocked(eventTime);
++        }
++
+         if (eventTime < powerGroup.getLastSleepTimeLocked()
+                 || eventTime < powerGroup.getLastWakeTimeLocked() || !mSystemReady) {
+             return false;
+@@ -3172,18 +3184,31 @@ public final class PowerManagerService extends SystemService
+                     if (now < groupNextTimeout) {
+                         groupUserActivitySummary = USER_ACTIVITY_SCREEN_BRIGHT;
+                         if (wakefulness == WAKEFULNESS_AWAKE) {
+-                            // Get current screen brightness to scale button/keyboard
+-                            float screenBrightScale = 1.0f;
++                            // Inverse-LCD scaling for the *keyboard* backlight only:
++                            // dim LCD (dark env) -> full kbd; bright LCD (daylight)
++                            // -> kbd off. Nav-buttons stay at their unscaled
++                            // brightness so they remain visible in daylight too.
++                            float keyboardBrightScale = 1.0f;
+                             try {
+                                 int screenBrightInt = Settings.System.getIntForUser(
+                                         mContext.getContentResolver(),
+                                         Settings.System.SCREEN_BRIGHTNESS,
+                                         255,
+                                         UserHandle.USER_CURRENT);
+-                                // Scale: brightness 0-255 maps to 0.1-1.0 for keys
+-                                screenBrightScale = Math.max(0.1f, screenBrightInt / 255.0f);
++                                if (screenBrightInt <= 0) {
++                                    keyboardBrightScale = 0.0f;
++                                } else if (screenBrightInt <= 3) {
++                                    // Ultra-dim (darkroom): medium kbd, don't blind user
++                                    keyboardBrightScale = 120.0f / 255.0f;
++                                } else if (screenBrightInt < 50) {
++                                    // Dim/medium: full kbd
++                                    keyboardBrightScale = 1.0f;
++                                } else {
++                                    // Bright (daylight): kbd off
++                                    keyboardBrightScale = 0.0f;
++                                }
+                             } catch (Exception e) {
+-                                screenBrightScale = 1.0f;
++                                keyboardBrightScale = 1.0f;
+                             }
+ 
+                             if (mButtonsLight != null) {
+@@ -3200,10 +3225,8 @@ public final class PowerManagerService extends SystemService
+                                         buttonBrightness = mButtonBrightness;
+                                     }
+                                 }
+-                                // Scale button brightness with screen brightness
+-                                if (buttonBrightness > BRIGHTNESS_OFF_FLOAT) {
+-                                    buttonBrightness *= screenBrightScale;
+-                                }
++                                // Nav-buttons: no LCD-inverse scaling — user wants them
++                                // visible in daylight too. Slider value used as-is.
+ 
+                                 if (!mButtonLightOnKeypressOnly) {
+                                     powerGroup.setLastButtonActivityTimeLocked(
+@@ -3248,10 +3271,30 @@ public final class PowerManagerService extends SystemService
+                                 }
+                                 // Scale keyboard brightness with screen brightness
+                                 if (keyboardBrightness > BRIGHTNESS_OFF_FLOAT) {
+-                                    keyboardBrightness *= screenBrightScale;
++                                    keyboardBrightness *= keyboardBrightScale;
++                                }
++                                // Lineage: honour BUTTON_BACKLIGHT_TIMEOUT for
++                                // the physical-keyboard backlight, but tie the
++                                // timer to keyboard activity (EVENT_BUTTON /
++                                // EVENT_OTHER, set in userActivityNoUpdateLocked)
++                                // so screen touches do not keep the kbd
++                                // backlight lit.
++                                final long lastKbdActivityTimeout = mButtonTimeout +
++                                        powerGroup.getLastKbdActivityTimeLocked();
++                                if (mButtonTimeout != 0 && now > lastKbdActivityTimeout) {
++                                    mKeyboardLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
++                                } else if (!mProximityPositive) {
++                                    // athena keyboard is always physically present, so
++                                    // mKeyboardVisible (driven by LID switch) would gate
++                                    // the backlight off. Ignore it and drive brightness
++                                    // directly from Settings.Secure / LineageSettings.
++                                    mKeyboardLight.setBrightness(keyboardBrightness);
++                                    if (keyboardBrightness != BRIGHTNESS_OFF_FLOAT &&
++                                            mButtonTimeout != 0 &&
++                                            now + mButtonTimeout < nextTimeout) {
++                                        groupNextTimeout = now + mButtonTimeout;
++                                    }
+                                 }
+-                                mKeyboardLight.setBrightness(mKeyboardVisible ?
+-                                        keyboardBrightness : BRIGHTNESS_OFF_FLOAT);
+                             }
+                         }
+                     } else {
